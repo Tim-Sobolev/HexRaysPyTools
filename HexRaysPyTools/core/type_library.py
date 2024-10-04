@@ -2,21 +2,11 @@ import ctypes
 import sys
 
 import idaapi
+import idc
 
 from . import const
+from idaapi import til_t
 import HexRaysPyTools.forms as forms
-
-
-class til_t(ctypes.Structure):
-    pass
-
-
-til_t._fields_ = [
-    ("name", ctypes.c_char_p),
-    ("desc", ctypes.c_char_p),
-    ("nbases", ctypes.c_int),
-    ("base", ctypes.POINTER(ctypes.POINTER(til_t)))
-]
 
 
 def _enable_library_ordinals(library_num):
@@ -42,10 +32,10 @@ def choose_til():
     # type: () -> (idaapi.til_t, int, bool)
     """ Creates a list of loaded libraries, asks user to take one of them and returns it with
     information about max ordinal and whether it's local or imported library """
-    idati = idaapi.cvar.idati
+    idati = idaapi.get_idati()
     list_type_library = [(idati, idati.name, idati.desc)]
-    for idx in range(idaapi.cvar.idati.nbases):
-        type_library = idaapi.cvar.idati.base(idx)          # type: idaapi.til_t
+    for idx in range(idati.nbases):
+        type_library = idati.base(idx)          # type: idaapi.til_t
         list_type_library.append((type_library, type_library.name, type_library.desc))
 
     library_chooser = forms.MyChoose(
@@ -57,17 +47,26 @@ def choose_til():
     library_num = library_chooser.Show(True)
     if library_num != -1:
         selected_library = list_type_library[library_num][0]    # type: idaapi.til_t
-        max_ordinal = idaapi.get_ordinal_qty(selected_library)
+        max_ordinal = idaapi.get_ordinal_count(selected_library)
         if max_ordinal == idaapi.BADORD:
             _enable_library_ordinals(library_num - 1)
-            max_ordinal = idaapi.get_ordinal_qty(selected_library)
+            max_ordinal = idaapi.get_ordinal_count(selected_library)
         print("[DEBUG] Maximal ordinal of lib {0} = {1}".format(selected_library.name, max_ordinal))
         return selected_library, max_ordinal, library_num == 0
 
+def create_type(name: str, declaration: str) -> bool:
+    tif = idaapi.tinfo_t()
+    if tif.get_named_type(None, name):
+        print("[ERROR] Type with name '{}' already exists".format(name))
+        return False
+    idaapi.idc_parse_types(declaration, 0)
+    if not tif.get_named_type(None, name):
+        print("[ERROR] Failed to create type '{}'".format(name))
+        return False
+    return True
 
 def import_type(library, name):
-    if library.name != idaapi.cvar.idati.name:
-        last_ordinal = idaapi.get_ordinal_qty(idaapi.cvar.idati)
-        type_id = idaapi.import_type(library, -1, name)  # tid_t
-        if type_id != idaapi.BADORD:
-            return last_ordinal
+    last_ordinal = idaapi.get_ordinal_count(idaapi.get_idati())
+    type_id = idc.import_type(library, -1, name)  # tid_t
+    if type_id != idaapi.BADORD:
+        return last_ordinal

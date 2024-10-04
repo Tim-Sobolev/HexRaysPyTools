@@ -3,6 +3,7 @@ import logging
 
 import idaapi
 import idc
+import ida_ida
 
 import HexRaysPyTools.core.cache as cache
 import HexRaysPyTools.core.const as const
@@ -20,7 +21,7 @@ def is_imported_ea(ea):
 
 
 def is_code_ea(ea):
-    if idaapi.cvar.inf.procname == "ARM":
+    if ida_ida.inf_get_procname() == "ARM":
         # In case of ARM code in THUMB mode we sometimes get pointers with thumb bit set
         flags = idaapi.get_full_flags(ea & -2)  # flags_t
     else:
@@ -38,7 +39,7 @@ def get_ptr(ea):
     if const.EA64:
         return idaapi.get_64bit(ea)
     ptr = idaapi.get_32bit(ea)
-    if idaapi.cvar.inf.procname == "ARM":
+    if ida_ida.inf_get_procname() == "ARM":
         ptr &= -2    # Clear thumb bit
     return ptr
 
@@ -49,7 +50,7 @@ def get_ordinal(tinfo):
     if ordinal == 0:
         t = idaapi.tinfo_t()
         struct_name = tinfo.dstr().split()[-1]        # Get rid of `struct` prefix or something else
-        t.get_named_type(idaapi.cvar.idati, struct_name)
+        t.get_named_type(idaapi.get_idati(), struct_name)
         ordinal = t.get_ordinal()
     return ordinal
 
@@ -175,7 +176,7 @@ def get_nice_pointed_object(tinfo):
         name = tinfo.dstr()
         if name[0] == 'P':
             pointed_tinfo = idaapi.tinfo_t()
-            if pointed_tinfo.get_named_type(idaapi.cvar.idati, name[1:]):
+            if pointed_tinfo.get_named_type(idaapi.get_idati(), name[1:]):
                 if tinfo.get_pointed_object().equals_to(pointed_tinfo):
                     return pointed_tinfo
     except TypeError:
@@ -213,12 +214,29 @@ def get_fields_at_offset(tinfo, offset):
             idx += 1
     return result
 
-
-def is_legal_type(tinfo):
+def is_legal_type(tinfo: idaapi.tinfo_t):
     tinfo.clr_const()
     if tinfo.is_ptr() and tinfo.get_pointed_object().is_forward_decl():
-        return tinfo.get_pointed_object().get_size() == idaapi.BADSIZE
-    return settings.SCAN_ANY_TYPE or bool([x for x in const.LEGAL_TYPES if x.equals_to(tinfo)])
+        is_bad_size = tinfo.get_pointed_object().get_size() == idaapi.BADSIZE
+        print(f"[DEBUG] Type {tinfo.dstr()} is forward declaration: {is_bad_size}")
+        return is_bad_size
+    if tinfo.is_unknown():
+        print(f"[DEBUG] Type {tinfo.dstr()} is unknown")
+        return False
+    return True
+
+# This function after 9.0 nearly always returns False
+# def is_legal_type(tinfo: idaapi.tinfo_t):
+#     tinfo.clr_const()
+    
+#     if tinfo.is_ptr() and tinfo.get_pointed_object().is_forward_decl():
+#         is_bad_size = tinfo.get_pointed_object().get_size() == idaapi.BADSIZE
+#         print(f"[DEBUG] Type {tinfo.dstr()} is forward declaration: {is_bad_size}")
+#         return is_bad_size
+#     legal_type = settings.SCAN_ANY_TYPE or bool([x for x in const.LEGAL_TYPES if x.equals_to(tinfo)])
+#     legal_type = tinfo.is_ptr()
+#     print(f"[DEBUG] Type {tinfo.dstr()} is legal: {legal_type}")
+#     return legal_type
 
 
 def search_duplicate_fields(udt_data):
@@ -247,9 +265,9 @@ def import_structure(name, tinfo):
     if idc.parse_decl(cdecl_typedef, idaapi.PT_TYP) is None:
         return 0
 
-    previous_ordinal = idaapi.get_type_ordinal(idaapi.cvar.idati, name)
+    previous_ordinal = idaapi.get_type_ordinal(idaapi.get_idati(), name)
     if previous_ordinal:
-        idaapi.del_numbered_type(idaapi.cvar.idati, previous_ordinal)
+        idaapi.del_numbered_type(idaapi.get_idati(), previous_ordinal)
         ordinal = idaapi.idc_set_local_type(previous_ordinal, cdecl_typedef, idaapi.PT_TYP)
     else:
         ordinal = idaapi.idc_set_local_type(-1, cdecl_typedef, idaapi.PT_TYP)

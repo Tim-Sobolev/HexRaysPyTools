@@ -62,7 +62,7 @@ def invert(func_ea, if_ea):
 
 class SwapThenElse(actions.HexRaysPopupAction):
     description = "Swap then/else"
-    hotkey = "Shift+S"
+    hotkey = "Shift+Alt+S" # Shift+S is now "Split Variable"
 
     def __init__(self):
         super(SwapThenElse, self).__init__()

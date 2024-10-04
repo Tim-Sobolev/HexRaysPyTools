@@ -14,6 +14,7 @@ from . import const
 from . import helper
 from . import templated_types
 import HexRaysPyTools.api as api
+import HexRaysPyTools.core.type_library as type_library
 from HexRaysPyTools.forms import MyChoose
 
 def log2(v):
@@ -70,7 +71,7 @@ def get_tinfo(name):
     idati = idaapi.get_idati()
     ti = idaapi.tinfo_t()
 
-    for ordinal in range(1, idaapi.get_ordinal_qty(idati)+1):
+    for ordinal in range(1, idaapi.get_ordinal_count(idati)+1):
         if ti.get_numbered_type(idati, ordinal) and ti.dstr() == name:
             return ti
     return None
@@ -261,15 +262,11 @@ class VirtualFunction:
     @property
     def name(self):
         name = idc.get_name(self.address)
-        if ida_name.is_valid_typename(name):
-            if "sub_" in name:
-                idx = int(self.offset / get_ptr_width())
-                name = f'{self.table_name}_func_{idx}'
-            return name
-        demangled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN))
-        if not demangled_name:
-            raise ValueError("Couldn't demangle name: {} at 0x{:x}".format(name, self.address))
-        return common.demangled_name_to_c_str(demangled_name)
+        denamgled_name = idc.demangle_name(name, idc.get_inf_attr(idc.INF_SHORT_DN))
+        if denamgled_name is None:
+            if idaapi.is_valid_typename(name):
+                return name
+        return common.demangled_name_to_c_str(denamgled_name + name[-4::])
 
     @property
     def tinfo(self):
@@ -390,21 +387,29 @@ class VirtualTable(AbstractMember):
             cdecl_typedef = idaapi.ask_text(0x10000, cdecl_typedef, "The following new type will be created")
             if not cdecl_typedef:
                 return
-        previous_ordinal = idaapi.get_type_ordinal(idaapi.cvar.idati, self.vtable_name)
-        if previous_ordinal:
-            idaapi.del_numbered_type(idaapi.cvar.idati, previous_ordinal)
-            ordinal = idaapi.idc_set_local_type(previous_ordinal, cdecl_typedef, idaapi.PT_TYP)
-        else:
-            ordinal = idaapi.idc_set_local_type(-1, cdecl_typedef, idaapi.PT_TYP)
-
-        if ordinal:
+        if type_library.create_type(self.vtable_name, cdecl_typedef):
             print("[Info] Virtual table " + self.vtable_name + " added to Local Types")
-            return idaapi.import_type(idaapi.cvar.idati, -1, self.vtable_name)
         else:
             print("[Error] Failed to create virtual table " + self.vtable_name)
             print("*" * 100)
             print(cdecl_typedef)
             print("*" * 100)
+        # MARK: Remove if above works
+        # previous_ordinal = idaapi.get_type_ordinal(idaapi.get_idati(), self.vtable_name)
+        # if previous_ordinal:
+        #     idaapi.del_numbered_type(idaapi.get_idati(), previous_ordinal)
+        #     ordinal = idaapi.idc_set_local_type(previous_ordinal, cdecl_typedef, idaapi.PT_TYP)
+        # else:
+        #     ordinal = idaapi.idc_set_local_type(-1, cdecl_typedef, idaapi.PT_TYP)
+
+        # if ordinal:
+        #     print("[Info] Virtual table " + self.vtable_name + " added to Local Types")
+        #     return type_library.import_type(idaapi.get_idati(), self.vtable_name)
+        # else:
+        #     print("[Error] Failed to create virtual table " + self.vtable_name)
+        #     print("*" * 100)
+        #     print(cdecl_typedef)
+        #     print("*" * 100)
 
     def show_virtual_functions(self, temp_struct):
         function_chooser = self.VirtualTableChoose(
@@ -545,7 +550,7 @@ class Member(AbstractMember):
             return
         _, tp, fld = result
         tinfo = idaapi.tinfo_t()
-        tinfo.deserialize(idaapi.cvar.idati, tp, fld, None)
+        tinfo.deserialize(idaapi.get_idati(), tp, fld, None)
         self.tinfo = tinfo
         self.is_array = False
 
@@ -675,7 +680,7 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
         # similar to the function below set_decl but allows us to apply more than one struct in a single call
         ret_val = idc.parse_decls(cdecls)
         if ret_val == 0:
-            tid = idaapi.import_type(idaapi.cvar.idati, -1, base_struct_name)
+            tid = idc.import_type(idaapi.get_idati(), base_struct_name)
             if tid:
                 print(f"[Info] New type \"{base_struct_name}\" was added to Local Types")
                 tinfo = idaapi.create_typedef(base_struct_name)
@@ -690,36 +695,49 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
             print(f"[ERROR] Could not parse structure declarations, found {ret_val} errors")
 
     def set_decl(self, cdecl, origin=0):
-            structure_name = idaapi.idc_parse_decl(idaapi.cvar.idati, cdecl, idaapi.PT_TYP)[0]
-            previous_ordinal = idaapi.get_type_ordinal(idaapi.cvar.idati, structure_name)
+            structure_name = idaapi.idc_parse_decl(idaapi.get_idati(), cdecl, idaapi.PT_TYP)[0]
 
-            if previous_ordinal:
-                reply = QtWidgets.QMessageBox.question(
-                    None,
-                    "HexRaysPyTools",
-                    "Structure already exist. Do you want to overwrite it?",
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
-                )
-                if reply == QtWidgets.QMessageBox.Yes:
-                    idaapi.del_numbered_type(idaapi.cvar.idati, previous_ordinal)
-                    ordinal = idaapi.idc_set_local_type(previous_ordinal, cdecl, idaapi.PT_TYP)
-                else:
-                    return
-            else:
-                ordinal = idaapi.idc_set_local_type(-1, cdecl, idaapi.PT_TYP)
-            # TODO: save comments
-            if ordinal:
-                tid = idaapi.import_type(idaapi.cvar.idati, -1, structure_name)
-                if tid:
-                    print(f"[Info] New type \"{structure_name}\" was added to Local Types")
-                    tinfo = idaapi.create_typedef(structure_name)
-                    ptr_tinfo = idaapi.tinfo_t()
-                    ptr_tinfo.create_ptr(tinfo)
-                    for scanned_var in self.get_unique_scanned_variables(origin):
-                        scanned_var.apply_type(ptr_tinfo)
-                    return tinfo
+            if type_library.create_type(structure_name, cdecl):
+                print(f"[Info] Structure \"{structure_name}\" was added to Local Types")
+                tinfo = idaapi.create_typedef(structure_name)
+                ptr_tinfo = idaapi.tinfo_t()
+                ptr_tinfo.create_ptr(tinfo)
+                for scanned_var in self.get_unique_scanned_variables(origin):
+                    scanned_var.apply_type(ptr_tinfo)
+                return tinfo
             else:
                 print("[ERROR] Structure {} probably already exist".format(structure_name))
+
+            # previous_ordinal = idaapi.get_type_ordinal(idaapi.get_idati(), structure_name)
+
+            # MARK: Remove if above works
+            # if previous_ordinal:
+            #     reply = QtWidgets.QMessageBox.question(
+            #         None,
+            #         "HexRaysPyTools",
+            #         "Structure already exist. Do you want to overwrite it?",
+            #         QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            #     )
+            #     if reply == QtWidgets.QMessageBox.Yes:
+            #         idaapi.del_numbered_type(idaapi.get_idati(), previous_ordinal)
+            #         ordinal = idaapi.idc_set_local_type(previous_ordinal, cdecl, idaapi.PT_TYP)
+            #     else:
+            #         return
+            # else:
+            #     ordinal = idaapi.idc_set_local_type(-1, cdecl, idaapi.PT_TYP)
+            # # TODO: save comments
+            # if ordinal:
+            #     tid = type_library.import_type(idaapi.get_idati(), structure_name)
+            #     if tid:
+            #         print(f"[Info] New type \"{structure_name}\" was added to Local Types")
+            #         tinfo = idaapi.create_typedef(structure_name)
+            #         ptr_tinfo = idaapi.tinfo_t()
+            #         ptr_tinfo.create_ptr(tinfo)
+            #         for scanned_var in self.get_unique_scanned_variables(origin):
+            #             scanned_var.apply_type(ptr_tinfo)
+            #         return tinfo
+            # else:
+            #     print("[ERROR] Structure {} probably already exist".format(structure_name))
 
 
     def pack(self, start=0, stop=None):
@@ -831,8 +849,8 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
             return
         min_size = enabled_items[-1].offset + enabled_items[-1].size - base
         tinfo = idaapi.tinfo_t()
-        for ordinal in range(1, idaapi.get_ordinal_qty(idaapi.cvar.idati)):
-            tinfo.get_numbered_type(idaapi.cvar.idati, ordinal)
+        for ordinal in range(1, idaapi.get_ordinal_count(idaapi.get_idati())):
+            tinfo.get_numbered_type(idaapi.get_idati(), ordinal)
             if tinfo.is_udt() and tinfo.get_size() >= min_size:
                 is_found = False
                 for offset in offsets:
