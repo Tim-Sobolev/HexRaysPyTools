@@ -3,7 +3,8 @@ import itertools
 from PyQt5 import QtCore, QtGui, QtWidgets
 from functools import reduce
 
-import ida_name
+import ida_kernwin
+import ida_typeinf
 import idaapi
 import idc
 import sys
@@ -939,14 +940,11 @@ class TemporaryStructureModel(QtCore.QAbstractTableModel):
 
     def load_struct(self):
 
-        name = ""
-        while True:
-            name = idaapi.ask_str(name, idaapi.HIST_TYPE, "Enter type:")
-            if name is None:
-                return
-            sid = idc.get_struc_id(name)
-            if sid != idc.BADADDR:
-                break
+        struct = ida_typeinf.tinfo_t()
+        if not ida_kernwin.choose_struct(struct, "Select structure to load"):
+            return
+
+        name = ida_typeinf.get_tid_name(struct.force_tid())
 
         self.default_name = name
 
